@@ -27,12 +27,19 @@ export default function TravelFormScreen({ navigation }) {
     const [places, setPlaces] = useState([]);
     const [loadingPlaces, setLoadingPlaces] = useState(false);
 
+    // Trip details
+    const [origin, setOrigin] = useState("");
+    const [tripDate, setTripDate] = useState(""); // expected format DD/MM/YYYY
+    const [tripTime, setTripTime] = useState(""); // e.g. 10:00 am
+    const [transportMode, setTransportMode] = useState("Car");
+    const [travellersCount, setTravellersCount] = useState("1");
+
     // Selection State
     const [selectedPlace, setSelectedPlace] = useState(null);
     const [modalVisible, setModalVisible] = useState(false);
 
-    // Visit Details
-    const [visitDate, setVisitDate] = useState(new Date().toISOString().split('T')[0]); // Default today YYYY-MM-DD
+    // Visit Details (for crowd system, uses today's date)
+    const [visitDate] = useState(new Date().toISOString().split('T')[0]); // Default today YYYY-MM-DD
     const [crowdData, setCrowdData] = useState(null);
     const [loadingCrowd, setLoadingCrowd] = useState(false);
     const [selectedSlot, setSelectedSlot] = useState(null);
@@ -104,14 +111,36 @@ export default function TravelFormScreen({ navigation }) {
         try {
             const placeName = selectedPlace.place_name || selectedPlace.name;
             const destinationName = destination || selectedPlace.city;
-            const travellers = 1; // Default to 1, can be made configurable
-            
+            const travellers = parseInt(travellersCount || "1", 10) || 1;
+
+            // 1) Create / update crowd visit for the selected place and time slot
             await api.post('/location/places/visit', {
                 destination: destinationName,
                 place_name: placeName,
                 visit_date: visitDate,
                 time_slot: selectedSlot.toLowerCase(),
                 travellers: travellers
+            });
+
+            // 2) Create a Trip record with full trip details
+            // travel_date expected format in backend: "DD/MM/YYYY, 10:00 am"
+            let travel_date: string;
+            if (tripDate && tripTime) {
+                travel_date = `${tripDate}, ${tripTime}`;
+            } else if (tripDate) {
+                travel_date = tripDate;
+            } else {
+                // Fallback to today's date in DD/MM/YYYY
+                travel_date = new Date().toLocaleDateString('en-GB');
+            }
+
+            await api.post('/trips', {
+                origin: origin || 'Unknown',
+                destination: destinationName,
+                travel_date,
+                return_date: null,
+                transport_mode: transportMode,
+                travellers_count: travellers,
             });
 
             Alert.alert("Success", "Your visit is scheduled! Crowd data updated.");
@@ -156,6 +185,81 @@ export default function TravelFormScreen({ navigation }) {
                 </TouchableOpacity>
                 <Text style={theme.typography.h2}>Plan Your Trip</Text>
             </View>
+
+            {/* Trip details form */}
+            <Card style={styles.tripDetailsCard}>
+                <Text style={styles.sectionTitle}>Trip details</Text>
+
+                <Text style={styles.smallLabel}>From (city)</Text>
+                <TextInput
+                    style={styles.textInput}
+                    placeholder="Enter origin city"
+                    placeholderTextColor={theme.colors.textSecondary}
+                    value={origin}
+                    onChangeText={setOrigin}
+                />
+
+                <View style={styles.tripRow}>
+                    <View style={styles.tripColumn}>
+                        <Text style={styles.smallLabel}>Date (DD/MM/YYYY)</Text>
+                        <TextInput
+                            style={styles.textInput}
+                            placeholder="e.g. 20/02/2026"
+                            placeholderTextColor={theme.colors.textSecondary}
+                            value={tripDate}
+                            onChangeText={setTripDate}
+                        />
+                    </View>
+                    <View style={styles.tripColumn}>
+                        <Text style={styles.smallLabel}>Time (e.g. 10:00 am)</Text>
+                        <TextInput
+                            style={styles.textInput}
+                            placeholder="e.g. 10:00 am"
+                            placeholderTextColor={theme.colors.textSecondary}
+                            value={tripTime}
+                            onChangeText={setTripTime}
+                        />
+                    </View>
+                </View>
+
+                <View style={styles.tripRow}>
+                    <View style={styles.tripColumn}>
+                        <Text style={styles.smallLabel}>Mode of transport</Text>
+                        <View style={styles.modeRow}>
+                            {['Car', 'Bus', 'Train', 'Flight', 'Bike'].map((mode) => (
+                                <TouchableOpacity
+                                    key={mode}
+                                    style={[
+                                        styles.modeChip,
+                                        transportMode === mode && styles.modeChipActive,
+                                    ]}
+                                    onPress={() => setTransportMode(mode)}
+                                >
+                                    <Text
+                                        style={[
+                                            styles.modeChipText,
+                                            transportMode === mode && styles.modeChipTextActive,
+                                        ]}
+                                    >
+                                        {mode}
+                                    </Text>
+                                </TouchableOpacity>
+                            ))}
+                        </View>
+                    </View>
+                    <View style={styles.tripColumn}>
+                        <Text style={styles.smallLabel}>No. of people</Text>
+                        <TextInput
+                            style={styles.textInput}
+                            placeholder="1"
+                            placeholderTextColor={theme.colors.textSecondary}
+                            keyboardType="numeric"
+                            value={travellersCount}
+                            onChangeText={setTravellersCount}
+                        />
+                    </View>
+                </View>
+            </Card>
 
             {/* Destination Search - web-safe (no GooglePlacesAutocomplete) */}
             <View style={styles.searchSection}>
@@ -338,6 +442,52 @@ const styles = StyleSheet.create({
         fontWeight: '500',
     },
     quickChipTextActive: {
+        color: theme.colors.primary,
+        fontWeight: '600',
+    },
+    tripDetailsCard: {
+        marginBottom: 20,
+        padding: 16,
+    },
+    smallLabel: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: theme.colors.textSecondary,
+        marginBottom: 4,
+    },
+    tripRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        gap: 12,
+        marginTop: 8,
+    },
+    tripColumn: {
+        flex: 1,
+    },
+    modeRow: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        marginTop: 8,
+    },
+    modeChip: {
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 16,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.surface,
+        marginRight: 8,
+        marginBottom: 8,
+    },
+    modeChipActive: {
+        borderColor: theme.colors.primary,
+        backgroundColor: theme.colors.primary + '15',
+    },
+    modeChipText: {
+        fontSize: 12,
+        color: theme.colors.text,
+    },
+    modeChipTextActive: {
         color: theme.colors.primary,
         fontWeight: '600',
     },
