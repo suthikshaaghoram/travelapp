@@ -1,0 +1,15 @@
+
+> travelapp@1.0.0 start
+> expo start
+
+Starting project at /Users/suthikshaaghoram/Downloads/travelapp
+Starting Metro Bundler
+Waiting on http://localhost:8081
+Logs for your project will appear below.
+Web ./index.js ░░░░░░░░░░░░░░░░  0.0% (0/1)
+Web ./index.js ▓▓▓▓▓▓▓▓▓░░░░░░░ 57.7% (404/532)
+Web Bundled 5878ms index.js (708 modules)
+ LOG  [web] Logs will appear in the browser console
+Web ./index.js ░░░░░░░░░░░░░░░░  0.0% (0/1)
+Web Bundled 1182ms index.js (1 module)
+ LOG  [web] Logs will appear in the browser console
