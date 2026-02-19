@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import {
     View,
     Text,
@@ -7,7 +7,9 @@ import {
     Alert,
     TouchableOpacity,
     Modal,
-    ActivityIndicator
+    ActivityIndicator,
+    TextInput,
+    Platform
 } from "react-native";
 import { Ionicons } from '@expo/vector-icons';
 import api from "../services/api";
@@ -15,11 +17,10 @@ import ScreenWrapper from "../components/ScreenWrapper";
 import Card from "../components/Card";
 import StyledButton from "../components/StyledButton";
 import { theme } from "../constants/theme";
-import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
 import { MOCK_PLACES_DATA } from '../constants/mockPlaces';
 
-// Mock API Key (Not needed if using mock data, but library requires a string)
-const GOOGLE_PLACES_API_KEY = "YOUR_API_KEY";
+// Quick-select cities (from mock data) - works on web and native
+const QUICK_CITIES = MOCK_PLACES_DATA.map((p) => p.description);
 
 export default function TravelFormScreen({ navigation }) {
     const [destination, setDestination] = useState("");
@@ -41,12 +42,15 @@ export default function TravelFormScreen({ navigation }) {
     const fetchPlaces = async (city) => {
         setLoadingPlaces(true);
         try {
-            const response = await api.get(`/location/places?destination=${city}`);
+            // Extract city name from full string (e.g., "Kodaikanal, Tamil Nadu, India" -> "Kodaikanal")
+            const cityName = city.split(',')[0].trim();
+            const response = await api.get(`/places?city=${encodeURIComponent(cityName)}`);
             setPlaces(response.data);
-            setDestination(city);
+            setDestination(cityName);
         } catch (error) {
             console.log("Error fetching places:", error);
-            Alert.alert("Error", "Could not load places.");
+            Alert.alert("Error", "Could not load places. Please try again.");
+            setPlaces([]);
         } finally {
             setLoadingPlaces(false);
         }
@@ -56,18 +60,34 @@ export default function TravelFormScreen({ navigation }) {
     const handlePlaceSelect = (place) => {
         setSelectedPlace(place);
         setModalVisible(true);
-        fetchCrowdForPlace(place.id, visitDate);
+        fetchCrowdForPlace(place, visitDate);
         setSelectedSlot(null);
     };
 
     // Fetch Crowd Data
-    const fetchCrowdForPlace = async (placeId, date) => {
+    const fetchCrowdForPlace = async (place, date) => {
         setLoadingCrowd(true);
         try {
-            const response = await api.get(`/location/crowd?place_id=${placeId}&date=${date}`);
-            setCrowdData(response.data);
+            const placeName = place.place_name || place.name;
+            const destinationName = destination || place.city || 'Unknown';
+            const response = await api.get(`/location/places/crowd-slots?destination=${encodeURIComponent(destinationName)}&place_name=${encodeURIComponent(placeName)}&date=${date}`);
+            // Transform response to match expected format
+            const crowdSlots = response.data || [];
+            const crowdData = {
+                morning: 0,
+                afternoon: 0,
+                evening: 0
+            };
+            crowdSlots.forEach(slot => {
+                if (slot.time_slot === 'morning') crowdData.morning = slot.visitor_count || 0;
+                if (slot.time_slot === 'noon') crowdData.afternoon = slot.visitor_count || 0;
+                if (slot.time_slot === 'evening') crowdData.evening = slot.visitor_count || 0;
+            });
+            setCrowdData(crowdData);
         } catch (error) {
             console.log("Error fetching crowd:", error);
+            // Set default empty data if error
+            setCrowdData({ morning: 0, afternoon: 0, evening: 0 });
         } finally {
             setLoadingCrowd(false);
         }
@@ -82,19 +102,25 @@ export default function TravelFormScreen({ navigation }) {
 
         setSubmitting(true);
         try {
-            await api.post('/location/visit', {
-                place_id: selectedPlace.id,
-                place_name: selectedPlace.name,
-                date: visitDate,
-                time_slot: selectedSlot
+            const placeName = selectedPlace.place_name || selectedPlace.name;
+            const destinationName = destination || selectedPlace.city;
+            const travellers = 1; // Default to 1, can be made configurable
+            
+            await api.post('/location/places/visit', {
+                destination: destinationName,
+                place_name: placeName,
+                visit_date: visitDate,
+                time_slot: selectedSlot.toLowerCase(),
+                travellers: travellers
             });
 
             Alert.alert("Success", "Your visit is scheduled! Crowd data updated.");
             setModalVisible(false);
-            // Optional: Refresh crowd data to show increase immediately next time
+            // Refresh crowd data to show increase immediately
+            fetchCrowdForPlace(selectedPlace, visitDate);
         } catch (error) {
-            console.error(error);
-            Alert.alert("Error", "Failed to book visit.");
+            console.error("Visit booking error:", error);
+            Alert.alert("Error", error.response?.data?.error || "Failed to book visit.");
         } finally {
             setSubmitting(false);
         }
@@ -110,31 +136,59 @@ export default function TravelFormScreen({ navigation }) {
     return (
         <ScreenWrapper>
             <View style={styles.header}>
-                <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
+                <TouchableOpacity 
+                    onPress={() => {
+                        // Try to go back, if that fails, navigate to Home tab
+                        try {
+                            if (navigation.canGoBack()) {
+                                navigation.goBack();
+                            } else {
+                                navigation.navigate('Home');
+                            }
+                        } catch (err) {
+                            console.log("Navigation error:", err);
+                            navigation.navigate('Home');
+                        }
+                    }} 
+                    style={styles.backBtn}
+                >
                     <Ionicons name="arrow-back" size={24} color={theme.colors.text} />
                 </TouchableOpacity>
-                <Text style={theme.typography.h2}>Explore & Avoid Crowds</Text>
+                <Text style={theme.typography.h2}>Plan Your Trip</Text>
             </View>
 
-            {/* Destination Search */}
-            <View style={{ marginBottom: 20, zIndex: 10 }}>
+            {/* Destination Search - web-safe (no GooglePlacesAutocomplete) */}
+            <View style={styles.searchSection}>
                 <Text style={styles.label}>Where are you going?</Text>
-                <View style={styles.autocompleteContainer}>
-                    <GooglePlacesAutocomplete
-                        placeholder='Search City (e.g. Kodaikanal)'
-                        onPress={(data, details = null) => {
-                            fetchPlaces(data.description);
-                        }}
-                        query={{
-                            key: GOOGLE_PLACES_API_KEY,
-                            language: 'en',
-                        }}
-                        styles={autocompleteStyles}
-                        enablePoweredByContainer={false}
-                        predefinedPlaces={MOCK_PLACES_DATA}
-                        predefinedPlacesAlwaysVisible={true}
-                    />
-                </View>
+                <TextInput
+                    style={styles.textInput}
+                    placeholder="Type city (e.g. Kodaikanal) or pick below"
+                    placeholderTextColor={theme.colors.textSecondary}
+                    value={destination}
+                    onChangeText={(text) => setDestination(text)}
+                    onSubmitEditing={() => {
+                        const city = destination.trim();
+                        if (city) fetchPlaces(city);
+                    }}
+                    returnKeyType="search"
+                />
+                <Text style={styles.quickLabel}>Quick select:</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.quickScroll}>
+                    {QUICK_CITIES.map((cityDesc) => {
+                        const cityName = cityDesc.split(',')[0].trim();
+                        return (
+                            <TouchableOpacity
+                                key={cityDesc}
+                                style={[styles.quickChip, destination === cityName && styles.quickChipActive]}
+                                onPress={() => fetchPlaces(cityDesc)}
+                            >
+                                <Text style={[styles.quickChipText, destination === cityName && styles.quickChipTextActive]}>
+                                    {cityName}
+                                </Text>
+                            </TouchableOpacity>
+                        );
+                    })}
+                </ScrollView>
             </View>
 
             {/* Places List */}
@@ -143,15 +197,19 @@ export default function TravelFormScreen({ navigation }) {
                     <ActivityIndicator size="large" color={theme.colors.primary} />
                 ) : (
                     places.map((place, index) => (
-                        <TouchableOpacity key={index} onPress={() => handlePlaceSelect(place)}>
+                        <TouchableOpacity key={place.id || index} onPress={() => handlePlaceSelect(place)}>
                             <Card style={styles.placeCard}>
                                 <View style={styles.placeHeader}>
-                                    <Text style={styles.placeName}>{place.name}</Text>
-                                    <View style={styles.ratingBadge}>
-                                        <Ionicons name="star" size={12} color="#F57C00" />
-                                        <Text style={styles.ratingText}>{place.rating}</Text>
-                                    </View>
+                                    <Text style={styles.placeName}>{place.place_name || place.name}</Text>
+                                    {place.category && (
+                                        <View style={styles.categoryBadge}>
+                                            <Text style={styles.categoryText}>{place.category}</Text>
+                                        </View>
+                                    )}
                                 </View>
+                                {place.address && (
+                                    <Text style={styles.addressText} numberOfLines={1}>{place.address}</Text>
+                                )}
                                 <Text style={styles.tapText}>Tap to check crowds</Text>
                             </Card>
                         </TouchableOpacity>
@@ -172,7 +230,7 @@ export default function TravelFormScreen({ navigation }) {
                 <View style={styles.modalOverlay}>
                     <View style={styles.modalContent}>
                         <View style={styles.modalHeader}>
-                            <Text style={styles.modalTitle}>{selectedPlace?.name}</Text>
+                            <Text style={styles.modalTitle}>{selectedPlace?.place_name || selectedPlace?.name}</Text>
                             <TouchableOpacity onPress={() => setModalVisible(false)}>
                                 <Ionicons name="close" size={24} color="#333" />
                             </TouchableOpacity>
@@ -239,11 +297,49 @@ const styles = StyleSheet.create({
         color: theme.colors.textSecondary,
         marginBottom: 8,
     },
-    autocompleteContainer: {
-        backgroundColor: theme.colors.surface,
+    searchSection: {
+        marginBottom: 20,
+    },
+    textInput: {
+        height: 50,
         borderRadius: 12,
-        elevation: 2,
-        zIndex: 5
+        paddingHorizontal: 16,
+        fontSize: 16,
+        backgroundColor: theme.colors.surface,
+        color: theme.colors.text,
+        marginBottom: 12,
+        ...(Platform.OS === 'web' ? { outlineStyle: 'none' } : {}),
+    },
+    quickLabel: {
+        fontSize: 12,
+        color: theme.colors.textSecondary,
+        marginBottom: 8,
+    },
+    quickScroll: {
+        marginBottom: 8,
+        maxHeight: 44,
+    },
+    quickChip: {
+        paddingHorizontal: 14,
+        paddingVertical: 10,
+        borderRadius: 20,
+        backgroundColor: theme.colors.surface,
+        marginRight: 8,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+    },
+    quickChipActive: {
+        backgroundColor: theme.colors.primary + '15',
+        borderColor: theme.colors.primary,
+    },
+    quickChipText: {
+        fontSize: 14,
+        color: theme.colors.text,
+        fontWeight: '500',
+    },
+    quickChipTextActive: {
+        color: theme.colors.primary,
+        fontWeight: '600',
     },
     placeCard: {
         marginBottom: 12,
@@ -278,6 +374,22 @@ const styles = StyleSheet.create({
         fontSize: 12,
         color: theme.colors.primary,
         marginTop: 4
+    },
+    addressText: {
+        fontSize: 12,
+        color: theme.colors.textSecondary,
+        marginTop: 4
+    },
+    categoryBadge: {
+        backgroundColor: theme.colors.primary + '20',
+        paddingHorizontal: 8,
+        paddingVertical: 4,
+        borderRadius: 8
+    },
+    categoryText: {
+        fontSize: 11,
+        color: theme.colors.primary,
+        fontWeight: '600'
     },
     modalOverlay: {
         flex: 1,
@@ -342,17 +454,3 @@ const styles = StyleSheet.create({
         color: '#999'
     }
 });
-
-const autocompleteStyles = {
-    textInput: {
-        height: 50,
-        borderRadius: 12,
-        paddingVertical: 5,
-        paddingHorizontal: 15,
-        fontSize: 16,
-        backgroundColor: 'transparent'
-    },
-    listView: {
-        backgroundColor: 'white',
-    }
-};
